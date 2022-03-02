@@ -1,4 +1,6 @@
 #include <sys/types.h>
+#include <pthread.h>
+#include <unistd.h>
 #include <openssl/md5.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -6,8 +8,21 @@
 
 #define PASS_LEN 6
 
+struct args {
+    unsigned char *md5;
+    unsigned char *pass;
+    long *progress;
+    int *finish;
+};
+
+struct thread_info {
+    pthread_t id;    // id returned by pthread_create()
+    struct args *args;  // pointer to the arguments
+};
+
 long ipow(long base, int exp) {
     long res = 1;
+
     for (;;) {
         if (exp & 1) {
             res *= base;
@@ -30,7 +45,7 @@ long pass_to_long(char *str) {
     }
 
     return res;
-};
+}
 
 void long_to_pass(long n, unsigned char *str) {  // str should have size PASS_SIZE+1
     for (int i = PASS_LEN - 1; i >= 0; i--) {
@@ -58,27 +73,74 @@ void hex_to_num(char *str, unsigned char *hex) {
     }
 }
 
-char *break_pass(unsigned char *md5) {
+void *print_progress(void *ptr){
+    struct args *args = ptr;
+    long bound = ipow(26, PASS_LEN);
+    int n;
+    char *bar = "##################################################";
+
+    while (*args->finish != 1) {
+        n = ((*args->progress) / (float) bound) * 50; // update progress
+
+        printf("\r%.*s", n, bar); // print '#' n times
+        fflush(stdout);
+
+        sleep(1);
+    }
+
+    return NULL;
+}
+
+void *break_pass(void *ptr) {
+    struct args *args = ptr;
     unsigned char res[MD5_DIGEST_LENGTH];
-    unsigned char *pass = malloc((PASS_LEN + 1) * sizeof(char));
-    long bound = ipow(26, PASS_LEN); // we have passwords of PASS_LEN
-    // lowercase chars =>
-    //     26 ^ PASS_LEN  different cases
+    long bound = ipow(26, PASS_LEN);
 
-    for (long i = 0; i < bound; i++) {
-        long_to_pass(i, pass);
+    for (;*args->progress < bound; (*args->progress)++) {
 
-        MD5(pass, PASS_LEN, res);
+        long_to_pass(*args->progress, args->pass);
 
-        if (0 == memcmp(res, md5, MD5_DIGEST_LENGTH)) {
+        MD5(args->pass, PASS_LEN, res);
+
+        if (0 == memcmp(res, args->md5, MD5_DIGEST_LENGTH)) {
+            printf("\n");
             break; // Found it!
         }
     }
 
-    return (char *) pass;
+    *args->finish = 1; // flag for progress thread to stop
+
+    return NULL;
+}
+
+struct thread_info *start_thread(unsigned char *md5_num, int *finish, long *progress, void *(operation)(void *)) {
+    struct thread_info *thread = malloc(sizeof (struct thread_info));
+
+    thread->args = malloc(sizeof (struct args));
+    thread->args->pass = malloc((PASS_LEN + 1) * sizeof(char));
+    thread->args->md5 = md5_num;
+    thread->args->finish = finish;
+    thread->args->progress = progress;
+
+    if (0 != pthread_create(&thread->id, NULL, operation, thread->args)) {
+        printf("Could not create thread\n");
+        exit(1);
+    }
+
+    return thread;
+}
+
+void free_thread(struct thread_info *thread) {
+    free(thread->args);
+    free(thread);
 }
 
 int main(int argc, char *argv[]) {
+    struct thread_info *calc; // thread for calculations
+    struct thread_info *progress; // thread for progress bar
+    int *finish = malloc(sizeof (int));
+    long *prog = malloc(sizeof (long));
+
     if (argc < 2) {
         printf("Use: %s string\n", argv[0]);
         exit(0);
@@ -87,9 +149,18 @@ int main(int argc, char *argv[]) {
     unsigned char md5_num[MD5_DIGEST_LENGTH];
     hex_to_num(argv[1], md5_num);
 
-    char *pass = break_pass(md5_num);
+    *finish = 0;
+    *prog = 0;
+    progress = start_thread(md5_num, finish, prog, print_progress);
+    calc = start_thread(md5_num, finish, prog, break_pass);
 
-    printf("%s: %s\n", argv[1], pass);
-    free(pass);
+    pthread_join(progress->id, NULL);
+    pthread_join(calc->id, NULL);
+
+    printf("%s: %s\n", argv[1], calc->args->pass);
+
+    free_thread(progress);
+    free_thread(calc);
+
     return 0;
 }
