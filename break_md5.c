@@ -78,11 +78,14 @@ void *print_progress(void *ptr){
     long bound = ipow(26, PASS_LEN);
     int n;
     char *bar = "##################################################";
+    char *dot = "..................................................";
+    float per;
 
     while (*args->finish != 1) {
         n = ((*args->progress) / (float) bound) * 50; // update progress
+        per = ((*args->progress) / (float) bound) * 100;
 
-        printf("\r%.*s", n, bar); // print '#' n times
+        printf("\r[Progress: %2.0f%%] [%.*s %.*s]", per, n, bar, 50 - n, dot);
         fflush(stdout);
 
         sleep(1);
