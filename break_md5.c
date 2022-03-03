@@ -135,6 +135,7 @@ struct thread_info *start_thread(unsigned char *md5_num, int *finish, long *prog
 }
 
 void free_thread(struct thread_info *thread) {
+    free(thread->args->pass);
     free(thread->args);
     free(thread);
 }
@@ -165,6 +166,8 @@ int main(int argc, char *argv[]) {
 
     free_thread(progress);
     free_thread(calc);
+    free(finish);
+    free(prog);
 
     return 0;
 }
