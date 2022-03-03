@@ -85,7 +85,7 @@ void *print_progress(void *ptr){
         n = ((*args->progress) / (float) bound) * 50; // update progress
         per = ((*args->progress) / (float) bound) * 100;
 
-        printf("\r[Progress: %2.0f%%] [%.*s %.*s]", per, n, bar, 50 - n, dot);
+        printf("\r[Progress: %2.0f%%] [%.*s \b%.*s]", per, n, bar, 50 - n, dot);
         fflush(stdout);
 
         sleep(1);
