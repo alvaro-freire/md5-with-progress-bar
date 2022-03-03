@@ -77,18 +77,22 @@ void hex_to_num(char *str, unsigned char *hex) {
 void *print_progress(void *ptr){
     struct args *args = ptr;
     long bound = ipow(26, PASS_LEN);
-    int n;
+    int n; // number of '#' to print
     char *bar = "##################################################";
     char *dot = "..................................................";
-    float per;
+    float per; // variable for percentage (progress)
+    long hashes; // variable to print hashes per second
+    int count_hash = 0; // variable to count the hashes per second
 
     while (*args->finish != 1) {
+        hashes = *args->progress - count_hash;
         n = ((*args->progress) / (float) bound) * BAR_LEN; // update progress
         per = ((*args->progress) / (float) bound) * 100;
 
-        printf("\r[Progress: %2.0f%%] [%.*s \b%.*s]", per, n, bar, BAR_LEN - n, dot);
+        printf("\r[Progress: %2.0f%%] [%.*s \b%.*s] %4ldkH/s", per, n, bar, BAR_LEN - n, dot, hashes / 1000);
         fflush(stdout);
 
+        count_hash = *args->progress;
         sleep(1);
     }
 
