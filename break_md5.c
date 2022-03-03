@@ -8,12 +8,16 @@
 
 #define PASS_LEN 6
 #define BAR_LEN 50
+#define THREADS 4
+#define BATCH 10
 
 struct args {
     unsigned char *md5;
     unsigned char *pass;
-    long *progress;
-    int *finish;
+    long *progress; // shared variable for tries
+    int *finish; // shared flag
+    pthread_mutex_t mutex_progress;
+    pthread_mutex_t mutex_finish;
 };
 
 struct thread_info {
@@ -74,15 +78,22 @@ void hex_to_num(char *str, unsigned char *hex) {
     }
 }
 
-void *print_progress(void *ptr){
+void *print_progress(void *ptr) {
     struct args *args = ptr;
     long bound = ipow(26, PASS_LEN);
     int n; // number of '#' to print
-    char *bar = "##################################################";
-    char *dot = "..................................................";
+    char bar[BAR_LEN], dot[BAR_LEN];
     float per; // variable for percentage (progress)
     long hashes; // variable to print hashes per second
     int count_hash = 0; // variable to count the hashes per second
+
+    for (int i = 0; i < BAR_LEN; ++i) {
+        bar[i] = '#';
+    }
+
+    for (int i = 0; i < BAR_LEN; ++i) {
+        dot[i] = '.';
+    }
 
     while (*args->finish != 1) {
         hashes = *args->progress - count_hash;
@@ -96,6 +107,8 @@ void *print_progress(void *ptr){
         sleep(1);
     }
 
+    printf("\n");
+
     return NULL;
 }
 
@@ -103,28 +116,76 @@ void *break_pass(void *ptr) {
     struct args *args = ptr;
     unsigned char res[MD5_DIGEST_LENGTH];
     long bound = ipow(26, PASS_LEN);
+    int number = 0;
+    unsigned char *pass = malloc((PASS_LEN + 1) * sizeof (char));
 
-    for (;*args->progress < bound; (*args->progress)++) {
+    while (1) {
+        pthread_mutex_lock(&args->mutex_finish);
+        if (*args->finish || *args->progress >= bound) {
+            pthread_mutex_unlock(&args->mutex_finish);
+            break;
+        }
+        pthread_mutex_unlock(&args->mutex_finish);
 
-        long_to_pass(*args->progress, args->pass);
+        pthread_mutex_lock(&args->mutex_progress); // Inicio sección crítica
+        number = *args->progress;
+        (*args->progress) += BATCH;
+        pthread_mutex_unlock(&args->mutex_progress); // Fin sección crítica
 
-        MD5(args->pass, PASS_LEN, res);
+        for (int i = 0; i < BATCH; ++i) {
+            long_to_pass(number + i, pass);
+            MD5(pass, PASS_LEN, res);
 
-        if (0 == memcmp(res, args->md5, MD5_DIGEST_LENGTH)) {
-            printf("\n");
-            break; // Found it!
+            if (0 == memcmp(res, args->md5, MD5_DIGEST_LENGTH)) {
+                pthread_mutex_lock(&args->mutex_finish);
+                memcpy(args->pass, pass, PASS_LEN + 1);
+                *args->finish = 1; // flag for progress thread to stop
+                pthread_mutex_unlock(&args->mutex_finish);
+                break;
+            }
         }
     }
 
-    *args->finish = 1; // flag for progress thread to stop
+    free(pass);
 
     return NULL;
 }
 
-struct thread_info *start_thread(unsigned char *md5_num, int *finish, long *progress, void *(operation)(void *)) {
-    struct thread_info *thread = malloc(sizeof (struct thread_info));
+// start THREAD threads running on break_pass
+struct thread_info *start_threads(unsigned char *md5_num, int *finish, long *progress) {
+    struct thread_info *threads = malloc(sizeof(struct thread_info) * THREADS);
+    pthread_mutex_t mutex_progress, mutex_finish;
+    int i;
 
-    thread->args = malloc(sizeof (struct args));
+    pthread_mutex_init(&mutex_progress, NULL);
+    pthread_mutex_init(&mutex_finish, NULL);
+
+    printf("number of crackers: %d\n", THREADS);
+
+    void *ptr = malloc((PASS_LEN + 1) * sizeof(char));
+
+    for (i = 0; i < THREADS; ++i) {
+        threads[i].args = malloc(sizeof(struct args));
+        threads[i].args->pass = ptr;
+        threads[i].args->md5 = md5_num;
+        threads[i].args->finish = finish;
+        threads[i].args->progress = progress;
+        threads[i].args->mutex_finish = mutex_finish;
+        threads[i].args->mutex_progress = mutex_progress;
+
+        if (0 != pthread_create(&threads[i].id, NULL, break_pass, threads[i].args)) {
+            printf("Could not create thread #%d\n", i);
+            exit(1);
+        }
+    }
+
+    return threads;
+}
+
+struct thread_info *start_thread(unsigned char *md5_num, int *finish, long *progress, void *(operation)(void *)) {
+    struct thread_info *thread = malloc(sizeof(struct thread_info));
+
+    thread->args = malloc(sizeof(struct args));
     thread->args->pass = malloc((PASS_LEN + 1) * sizeof(char));
     thread->args->md5 = md5_num;
     thread->args->finish = finish;
@@ -144,11 +205,23 @@ void free_thread(struct thread_info *thread) {
     free(thread);
 }
 
+void free_threads(struct thread_info *threads) {
+    pthread_mutex_destroy(&threads[0].args->mutex_finish);
+    pthread_mutex_destroy(&threads[0].args->mutex_progress);
+    free(threads[0].args->pass);
+
+    for (int i = 0; i < THREADS; ++i) {
+        free(threads[i].args);
+    }
+
+    free(threads);
+}
+
 int main(int argc, char *argv[]) {
     struct thread_info *calc; // thread for calculations
     struct thread_info *progress; // thread for progress bar
-    int *finish = malloc(sizeof (int));
-    long *prog = malloc(sizeof (long));
+    int *finish = malloc(sizeof(int));
+    long *prog = malloc(sizeof(long));
 
     if (argc < 2) {
         printf("Use: %s string\n", argv[0]);
@@ -161,15 +234,18 @@ int main(int argc, char *argv[]) {
     *finish = 0;
     *prog = 0;
     progress = start_thread(md5_num, finish, prog, print_progress);
-    calc = start_thread(md5_num, finish, prog, break_pass);
+    calc = start_threads(md5_num, finish, prog);
 
+    for (int i = 0; i < THREADS; ++i) {
+        pthread_join(calc[i].id, NULL);
+    }
     pthread_join(progress->id, NULL);
-    pthread_join(calc->id, NULL);
 
-    printf("%s: %s\n", argv[1], calc->args->pass);
+    printf("%s: %s\n", argv[1], calc[0].args->pass);
 
     free_thread(progress);
-    free_thread(calc);
+    free_threads(calc);
+
     free(finish);
     free(prog);
 
