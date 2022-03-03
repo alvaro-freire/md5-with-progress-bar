@@ -7,6 +7,7 @@
 #include <string.h>
 
 #define PASS_LEN 6
+#define BAR_LEN 50
 
 struct args {
     unsigned char *md5;
@@ -82,10 +83,10 @@ void *print_progress(void *ptr){
     float per;
 
     while (*args->finish != 1) {
-        n = ((*args->progress) / (float) bound) * 50; // update progress
+        n = ((*args->progress) / (float) bound) * BAR_LEN; // update progress
         per = ((*args->progress) / (float) bound) * 100;
 
-        printf("\r[Progress: %2.0f%%] [%.*s \b%.*s]", per, n, bar, 50 - n, dot);
+        printf("\r[Progress: %2.0f%%] [%.*s \b%.*s]", per, n, bar, BAR_LEN - n, dot);
         fflush(stdout);
 
         sleep(1);
