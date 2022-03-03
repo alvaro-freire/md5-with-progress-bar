@@ -16,8 +16,8 @@ struct args {
     unsigned char *pass;
     long *progress; // shared variable for tries
     int *finish; // shared flag
-    pthread_mutex_t mutex_progress;
-    pthread_mutex_t mutex_finish;
+    pthread_mutex_t *mutex_progress;
+    pthread_mutex_t *mutex_finish;
 };
 
 struct thread_info {
@@ -120,27 +120,27 @@ void *break_pass(void *ptr) {
     unsigned char *pass = malloc((PASS_LEN + 1) * sizeof (char));
 
     while (1) {
-        pthread_mutex_lock(&args->mutex_finish);
+        pthread_mutex_lock(args->mutex_finish);
         if (*args->finish || *args->progress >= bound) {
-            pthread_mutex_unlock(&args->mutex_finish);
+            pthread_mutex_unlock(args->mutex_finish);
             break;
         }
-        pthread_mutex_unlock(&args->mutex_finish);
+        pthread_mutex_unlock(args->mutex_finish);
 
-        pthread_mutex_lock(&args->mutex_progress); // Inicio sección crítica
+        pthread_mutex_lock(args->mutex_progress); // Inicio sección crítica
         number = *args->progress;
         (*args->progress) += BATCH;
-        pthread_mutex_unlock(&args->mutex_progress); // Fin sección crítica
+        pthread_mutex_unlock(args->mutex_progress); // Fin sección crítica
 
         for (int i = 0; i < BATCH; ++i) {
             long_to_pass(number + i, pass);
             MD5(pass, PASS_LEN, res);
 
             if (0 == memcmp(res, args->md5, MD5_DIGEST_LENGTH)) {
-                pthread_mutex_lock(&args->mutex_finish);
+                pthread_mutex_lock(args->mutex_finish);
                 memcpy(args->pass, pass, PASS_LEN + 1);
                 *args->finish = 1; // flag for progress thread to stop
-                pthread_mutex_unlock(&args->mutex_finish);
+                pthread_mutex_unlock(args->mutex_finish);
                 break;
             }
         }
@@ -154,11 +154,14 @@ void *break_pass(void *ptr) {
 // start THREAD threads running on break_pass
 struct thread_info *start_threads(unsigned char *md5_num, int *finish, long *progress) {
     struct thread_info *threads = malloc(sizeof(struct thread_info) * THREADS);
-    pthread_mutex_t mutex_progress, mutex_finish;
+    pthread_mutex_t *mutex_progress, *mutex_finish;
     int i;
 
-    pthread_mutex_init(&mutex_progress, NULL);
-    pthread_mutex_init(&mutex_finish, NULL);
+    mutex_progress = malloc(sizeof(pthread_mutex_t));
+    mutex_finish = malloc(sizeof(pthread_mutex_t));
+
+    pthread_mutex_init(mutex_progress, NULL);
+    pthread_mutex_init(mutex_finish, NULL);
 
     printf("number of crackers: %d\n", THREADS);
 
@@ -182,16 +185,15 @@ struct thread_info *start_threads(unsigned char *md5_num, int *finish, long *pro
     return threads;
 }
 
-struct thread_info *start_thread(unsigned char *md5_num, int *finish, long *progress, void *(operation)(void *)) {
+struct thread_info *start_thread(int *finish, long *progress) {
     struct thread_info *thread = malloc(sizeof(struct thread_info));
 
     thread->args = malloc(sizeof(struct args));
     thread->args->pass = malloc((PASS_LEN + 1) * sizeof(char));
-    thread->args->md5 = md5_num;
     thread->args->finish = finish;
     thread->args->progress = progress;
 
-    if (0 != pthread_create(&thread->id, NULL, operation, thread->args)) {
+    if (0 != pthread_create(&thread->id, NULL, print_progress, thread->args)) {
         printf("Could not create thread\n");
         exit(1);
     }
@@ -206,8 +208,10 @@ void free_thread(struct thread_info *thread) {
 }
 
 void free_threads(struct thread_info *threads) {
-    pthread_mutex_destroy(&threads[0].args->mutex_finish);
-    pthread_mutex_destroy(&threads[0].args->mutex_progress);
+    pthread_mutex_destroy(threads[0].args->mutex_finish);
+    pthread_mutex_destroy(threads[0].args->mutex_progress);
+    free(threads[0].args->mutex_finish);
+    free(threads[0].args->mutex_progress);
     free(threads[0].args->pass);
 
     for (int i = 0; i < THREADS; ++i) {
@@ -233,7 +237,7 @@ int main(int argc, char *argv[]) {
 
     *finish = 0;
     *prog = 0;
-    progress = start_thread(md5_num, finish, prog, print_progress);
+    progress = start_thread(finish, prog);
     calc = start_threads(md5_num, finish, prog);
 
     for (int i = 0; i < THREADS; ++i) {
